@@ -1,2 +1,2 @@
-adapter: StarlingAdapter
-queue: classification
+:adapter: StarlingAdapter
+:queue: classification
