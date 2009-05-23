@@ -1,0 +1,12 @@
+* Clean up the StarlingAdapter and get it into SMQueue (or at least it's own
+  Gem).
+
+* Encapsulate all that message handling in an easily testable container.
+
+* Support other services in a pluggable manner. Askimet looks nice.
+
+* Try other services when one fails.
+
+* Send back classification accuracy if the classification service provides it.
+
+* Tests!

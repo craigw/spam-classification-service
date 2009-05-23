@@ -1,0 +1,105 @@
+#! /usr/bin/env ruby
+
+require 'rubygems'
+require 'smqueue'
+require 'json/pure'
+require 'yaml'
+require 'starling'
+require 'xmlrpc/client'
+
+module SMQueue
+  class StarlingAdapter < ::SMQueue::Adapter
+    class Configuration < ::SMQueue::AdapterConfiguration
+      DEFAULT_SERVER = '127.0.0.1:22122'
+
+      has :name
+      has :server, :default => DEFAULT_SERVER
+    end
+
+    def initialize(*args)
+      super
+      options = args.first
+      @configuration = options[:configuration]
+      @configuration[:server] ||= Configuration::DEFAULT_SERVER
+
+      @client = ::Starling.new(@configuration[:server])
+    end
+
+    def put(*args, &block)
+      @client.set @configuration[:name], args[0].to_json
+    end
+
+    def get(*args, &block)
+      if block_given?
+        loop do
+          yield next_message
+        end
+      else
+        next_message
+      end
+    end
+
+    private
+    def next_message
+      ::SMQueue::Message(:headers => {},
+        :body => JSON.parse(@client.get(@configuration[:name])))
+    end
+  end
+end
+
+raw_configuration = File.read(File.dirname(__FILE__) + '/../config/message_queue.yml')
+configuration = YAML.load(raw_configuration)
+
+classifier = XMLRPC::Client.new("test.blogspam.net", "/", 8888)
+
+input = SMQueue(configuration)
+input.get do |request|
+  job = request.body
+  document = job["document"]
+  reply_to = job["reply_to"]
+  correlation_id = job["request_id"]
+  request_type = job["request_type"].to_s.strip
+
+  reply = begin
+    case request_type
+    when /^learn_(ham|spam)$/i
+      classification = request_type =~ /spam/ ? 'spam' : 'ok'
+      result = classifier.call "classifyComment", :comment => document,
+                                                  :train => classification
+      if result =~ /trained/i
+        {
+          "result" => {
+            "trained" => classification == 'spam' ? 'spam' : 'ham'
+          }
+        }
+      else
+        raise "Unknown training status: `#{result}`"
+      end
+    else
+      result = classifier.call "testComment", :comment => document,
+                                              :ip => "0.0.0.0"
+      classification = case result
+      when /spam/i
+        :spam
+      when /ok/i
+        :ham
+      else
+        raise "Unknown classification string: `#{result}`"
+      end
+
+      {
+        "result" => {
+          "classification" => classification.to_s,
+        }
+      }
+    end
+  rescue => e
+    {
+      "error" => e.message
+    }
+  end
+  reply.merge!("correlation_id" => correlation_id)
+  reply_configuration = configuration.merge(:name => reply_to)
+  reply_channel = SMQueue(:configuration => reply_configuration)
+  reply_channel.put reply
+end

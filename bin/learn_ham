@@ -1,0 +1,80 @@
+#! /usr/bin/env ruby
+# A command-line client for the Spam Classifier service.
+
+require 'rubygems'
+require 'smqueue'
+require 'json'
+require 'yaml'
+require 'starling'
+require 'uuid'
+
+module SMQueue
+  class StarlingAdapter < ::SMQueue::Adapter
+    class Configuration < ::SMQueue::AdapterConfiguration
+      DEFAULT_SERVER = '127.0.0.1:22122'
+
+      has :name
+      has :server, :default => DEFAULT_SERVER
+    end
+
+    def initialize(*args)
+      super
+      options = args.first
+      @configuration = options[:configuration]
+      @configuration[:server] ||= Configuration::DEFAULT_SERVER
+
+      @client = ::Starling.new(@configuration[:server])
+    end
+
+    def put(*args, &block)
+      @client.set @configuration[:name], args[0].to_json
+    end
+
+    def get(*args, &block)
+      if block_given?
+        loop do
+          yield next_message
+        end
+      else
+        next_message
+      end
+    end
+
+    private
+    def next_message
+      ::SMQueue::Message(:headers => {},
+        :body => JSON.parse(@client.get(@configuration[:name])))
+    end
+  end
+end
+
+raw_configuration = File.read(File.dirname(__FILE__) + '/../config/message_queue.yml')
+configuration = YAML.load(raw_configuration)
+
+document = ""
+while line = STDIN.gets do
+  document << line
+end
+document.strip!
+
+exit 1 if document == ''
+
+mutex = Mutex.new
+
+input = SMQueue(configuration.merge(:name => "classifier.client"))
+reply_thread = Thread.new(input) do |queue|
+  reply = queue.get
+  mutex.synchronize { puts "Response: #{reply.body.inspect}" }
+end
+
+request = {
+  "request_id" => UUID.new.generate,
+  "request_type" => "learn_ham",
+  "reply_to" => "classifier.client",
+  "document" => document
+}
+mutex.synchronize { puts "Request: #{request.inspect}" }
+
+output = SMQueue(configuration)
+output.put request
+reply_thread.join

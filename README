@@ -1,0 +1,180 @@
+Spam Classification Service
+===========================
+
+A service that sits on the enterprise service bus and classifies documents as
+either ham or spam.
+
+
+Service Configuration
+---------------------
+
+There is just one pretty small file that you'll need to create. There's an
+example in the config/ directory.
+
+  file:config/message_queue.yml
+
+    SMQueue configuration for the input of this service. SMQueue configuration
+    is a fairly in-depth subject but if you're already using it elsewhere you
+    can pretty much copy and paste the details.
+
+    If you'd just like to use Starling then the example configuration file
+    contains enough to get you started. Copy that to config/message_queue.yml
+    and start Starling.
+
+
+Running the service
+-------------------
+
+After configuring the service just run the classifyd script:
+
+  bin/classifyd
+
+Normally you'd want to run this under something like DaemonTools.
+
+
+Using the service
+-----------------
+If you use this service you'll be using Enterprise Integration Patterns for:
+Request-Reply, Return-Address and Correlation-Identifier. How fancy is that?
+
+I'll assume you're familiar with a message bus and SMQueue and skip straight
+to how to use this service.
+
+1. Pick a job identifier. A job is a single request to classify a document.
+   This identifier will be used in all communications with the service about
+   your classification request. Make it good and unique - don't want to get
+   your jobs mixed up or you'll end up with documents that are marked as
+   spam - or worse, ham - when they're not. Make it hard to guess too -
+   don't make it sequential! I'd normally use something like the UUID gem to
+   generate these identifiers. It needs to be a String.
+
+   When you request that a classification is performed you'll tell the service
+   what this number is by calling it a request_id. When the service sends
+   you a reply you'll get exactly the same identifier back but it'll be
+   called the correlation_id.
+
+2. Pick a reply channel. Somehow you're going to want to find out what the
+   classification service thinks the document is. At the moment the reply
+   channel will receive messages on the same broker that the classification
+   service receives requests from. I'm not sure it that will always be the
+   case. See the documentation for your broker if you'd like to move the
+   message from here to somewhere else.
+
+   Normally I'd pick a queue name that is unique to the application that
+   requests the classification and have a consumer listening there.
+   Something like `/queue/friendsworldwide.classification.result`. How you
+   specify your reply channel depends again on your broker implementation.
+
+3. Send your request. The service is expecting JSON that looks like this:
+
+    {
+      request_id: "29925b30-29af-012c-07ff-001b63b8611d",
+      request_type: "classify",
+      reply_to: "/queue/globallocator.classification.results",
+      document: "Lorem ipsum dolor sit amet, consectetur... id est laborum."
+    }
+
+   You may also ask the service to learn that the document is ham or spam by
+   sending a request_type of "learn_ham" or "learn_spam" respectively.
+
+   If you don't send a request_type then the service will assume that you want
+   the document classified.
+
+4. Receive a response on the reply channel. Something somewhere that you
+   write must be listening to this! Responses will be in JSON.
+
+   Replies look like this when the service thinks that the document is spam:
+
+     {
+       correlation_id: "29925b30-29af-012c-07ff-001b63b8611d",
+       result: {
+         classification: "spam"
+       }
+     }
+
+   If the classification service thinks that the document is ham then it'll
+   send you a reply like this:
+   
+    {
+      correlation_id: "29925b30-29af-012c-07ff-001b63b8611d",
+      result: {
+        classification: "ham"
+      }
+    }
+
+   If you asked the service to learn that a document was ham or spam then
+   you'll get a reply that looks like this:
+   
+    {
+      correlation_id: "29925b30-29af-012c-07ff-001b63b8611d",
+      result: {
+        trained: "ham" // or "spam" if you asked that it learn spam
+      }
+    }
+
+   Sometimes things go wrong - maybe the classification service couldn't
+   decide if the document was ham or spam. If that happens you'll get a
+   message that looks a like this:
+
+    {
+      correlation_id: "208ef920-294c-012c-07da-001b63b8611d",
+      error: "unclassifiable document"
+    }
+
+  These will be put on the same reply channel as successful responses. It's
+  your job to find out if a message is an error or not before processing it.
+
+
+Examples
+--------
+
+Several example clients are included with this distribution to show how simple
+writing one is.
+
+file:bin/classify
+
+  Reads a document from STDIN, asks the service to classify it, then prints
+  the result to STDOUT.
+
+  To run the example first configure the service as described above then run:
+
+    bin/classify < document
+
+To classify the README you might run:
+
+    bin/classify < README
+
+file:bin/learn_ham
+
+  Read a document on STDIN and teach the service that it should be classified
+  as ham.
+
+    bin/learn_ham < document
+
+file:bin/learn_spam
+
+  Read a document on STDIN and teach the service that it should be classified
+  as spam.
+
+    bin/learn_spam < document
+
+
+Contributing
+------------
+
+See file:TODO for a number of things that are still outstanding. If you fancy
+tackling any of these please do. Fire me a pull request when you're done.
+
+
+Authors
+-------
+
+Craig R Webster <http://barkingiguana.com/~craig>
+
+
+Licence
+-------
+
+Copyright (C) 2009 Craig R Webster. Release under the MIT licence.
+
+See file:LICENCE for the full text of the MIT Licence.
